@@ -1,0 +1,10 @@
+.*
+!.gitignore
+*~
+
+nand.bin
+uImage
+rootfs.jffs2
+u-boot.bin
+
+

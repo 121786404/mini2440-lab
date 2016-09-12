@@ -1,0 +1,220 @@
+#!/bin/bash
+###############################################################################
+# File : collect-src
+# Description: script to find all the compiled source file and header file
+#
+#       You must first compile the source and generate *.o files. 
+#
+#       For kernel and busybox , the *.o.cmd file will be generated to find the header file. 
+#       For u-boot, the .depend file will be generated to find the header file.
+#       Others, please concate with me for support!
+# 
+###############################################################################
+#
+# Usage:
+#
+#     collect-src [-i list_file ]
+#
+# where:
+#
+#     -i list_file
+#          Specifies the name of the file into which the list of files
+#          to index is placed (default: src.list).
+#
+#     -f 
+#          Output full file path in the list_file
+#
+#
+###############################################################################
+
+source_path=.
+
+src_list=src.list
+tmp_mk=tmp_makefile.mk
+full_path=false
+
+
+while [ -n "$1" ]
+do
+    case $1 in
+    -i)
+        if [ "X$2" = "X" ]; then
+            echo "$0: No source path specified" >&2
+            exit 1
+        fi
+        source_path="$2"
+        shift
+        ;;
+    -o)
+        if [ "X$2" = "X" ]; then
+            echo "$0: No list file specified" >&2
+            exit 1
+        fi
+        src_list="$2"
+        shift
+        ;;
+    -f)
+        if [ "X$2" = "X" ]; then
+            echo "$0: No path prefix specified" >&2
+            exit 1
+        fi
+        full_path=true
+        path_prefix="$2"
+        shift
+        ;;
+    *)
+        echo "Unsupport args $1"
+        exit
+        ;;
+    esac
+    shift
+done
+
+
+pushd $source_path
+
+
+cat <<EOF > $tmp_mk
+
+src_list := $src_list
+pwd := \$(shell pwd)
+
+
+.PHONY: all 
+
+# make all is the first target 
+all: 
+
+define find_file
+\$(shell find \$(1) \( -name "\$(2)" -a -type f \) | \\
+	 sed -e '/\/CVS\//d' -e '/\/RCS\//d' -e '/\.svn\//d' -e 's/^\.\///')
+endef
+
+define change1suffix
+\$(foreach f,\$(1), \\
+	\$(addprefix \$(dir \$(f)),\$(patsubst .%.o.cmd,%.o,\$(notdir \$(f)))))
+endef
+
+define _change2suffix
+\$(wildcard \$(dir \$(1))\$(patsubst %.o,.%.\$(2),\$(notdir \$(1))))
+endef
+
+define change2suffix
+\$(foreach f,\$(1), \\
+    \$(call _change2suffix,\$(f),\$(2)))
+endef
+
+define _obj2src
+\$(wildcard \$(patsubst %.o,%.\$(2),\$(1)))
+endef
+
+define obj2src
+\$(eval _src_f := \$(call _obj2src,\$(1),c)) \\
+\$(eval _src_f += \$(call _obj2src,\$(1),h)) \\
+\$(eval _src_f += \$(call _obj2src,\$(1),l)) \\
+\$(eval _src_f += \$(call _obj2src,\$(1),y)) \\
+\$(eval _src_f += \$(call _obj2src,\$(1),S)) \\
+\$(eval _src_f += \$(call _obj2src,\$(1),C)) \\
+\$(eval _src_f += \$(call _obj2src,\$(1),cpp)) \\
+\$(eval _src_f += \$(call _obj2src,\$(1),java)) \\
+\$(_src_f)
+endef
+
+define get_src_from_var
+\$(eval _all_files:=) \\
+\$(foreach v,\$(1), \\
+    \$(eval _files := \$(subst \$(pwd)/,,\$(\$(v)))) \\
+    \$(eval _files := \$(patsubst /%,,\$(_files))) \\
+    \$(eval _all_files := \$(sort \$(_all_files) \$(wildcard \$(_files))))) \\
+\$(_all_files) \\
+\$(eval _all_files:=)
+endef
+
+DEP_FILE := \$(call find_file,.,*.o.cmd)
+\$(if \$(DEP_FILE),, \\
+    \$(eval DEP_FILE := \$(call find_file,.,.depend)) \\
+    \$(eval nokernel := true))
+
+ifneq (\$(nokernel),true)
+################ Find all kernel source files ######################
+dep_objs := \$(call change1suffix,\$(DEP_FILE))
+dep_vars := \$(addprefix deps_,\$(dep_objs))
+### New kernel ###
+dep_vars += \$(addprefix source_,\$(dep_objs))
+
+include \$(DEP_FILE)
+prefix := deps_\$(pwd)/
+
+\$(eval dep_vars += \$(addprefix \$(prefix),\$(dep_objs)))
+
+######## Only find the kernel directory src and header files ####
+autoconf_header := \$(shell test -d include && find include -name autoconf.h)
+
+all_src_files := \$(autoconf_header)
+all_src_files += \$(call get_src_from_var,\$(dep_vars))
+
+else # \$(nokernel) == true
+############### Not kernel ##########################################
+O_SRC := \$(call find_file,.,*.o))
+
+autoconf_header := \$(shell test -e include/config.h && echo include/config.h)
+ifneq (\$(autoconf_header),)
+autoconf_var := \$(shell gcc -M \$(autoconf_header) -Iinclude | sed 's/:/ :=/')
+\$(eval \$(autoconf_var))
+all_src_files += \$(config.o)
+endif
+
+all_src_files += \$(wildcard include/asm/arch/*.h)
+all_src_files += \$(call obj2src,\$(O_SRC))
+
+#################### Find all source file by .depend ############
+ifneq (\$(DEP_FILE),)
+\$(foreach f,\$(DEP_FILE), \\
+	\$(shell sed 's/\(^[a-zA-Z0-9_][a-zA-Z0-9_-]*\.o\):/\1:=/' \$(f) > \$(f).tmp))
+
+dep_vars := \$(notdir \$(O_SRC))
+include \$(addsuffix .tmp,\$(DEP_FILE))
+all_src_files := \$(sort \$(all_src_files) \$(call get_src_from_var,\$(dep_vars)))
+endif  # DEP_FILE
+
+endif # end of nokernel
+
+
+all:
+	@echo "----------- start to generate src list ------------"
+	@rm -rf \$(src_list)
+	@for file in \$(all_src_files); do echo \$\${file} >> \$(src_list); done
+	@echo "----------- generate source file success ----------"
+
+
+
+EOF
+
+PWD=`pwd`
+
+### collect files by Makefile
+make -f $tmp_mk
+
+
+all_src=`cat $src_list`
+
+### remove tmp files
+rm -rf $tmp_mk
+
+
+
+
+if [ "$full_path" = "true" ]; then
+	sed -i "s#^#$path_prefix/#"  $src_list
+fi
+
+# Generate cscope database with kernel mode
+# cscope -k -b -i $src_list
+
+
+
+
+
+
+
+

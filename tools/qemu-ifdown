@@ -1,0 +1,3 @@
+#!/bin/sh
+#echo "Executing /qemu-ifdown"
+sudo ifconfig $1 10.0.0.1 down
