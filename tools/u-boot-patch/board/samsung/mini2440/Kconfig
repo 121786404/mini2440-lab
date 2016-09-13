@@ -4,7 +4,7 @@ config SYS_BOARD
 	default "mini2440"
 
 config SYS_VENDOR
-	default "friendlyarm"
+	default "samsung"
 
 config SYS_SOC
 	default "s3c24x0"
