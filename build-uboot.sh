@@ -1,11 +1,10 @@
 #!/bin/bash
 
-
+rm -rf image/u-boot.bin
 cd u-boot
-git reset --hard HEAD
-git pull
+git reset --hard aeff6d50
 git clean -f
-cp ../tools/u-boot-patch/* . -r
+cp ../tools/u-boot-patch-aeff6d50/* . -r
 export ARCH=arm
 export CROSS_COMPILE=arm-linux-
 make mini2440_config
